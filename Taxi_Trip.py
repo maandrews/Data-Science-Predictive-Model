@@ -92,8 +92,8 @@ minLong = combine[1]['pickup_longitude'].min()
 maxLat = combine[1]['pickup_latitude'].max()
 maxLong = combine[1]['pickup_longitude'].max()
 
-combine[1]['pickup_latitude'] = (combine[0]['pickup_latitude']-minLat)/(maxLat-minLat)
-combine[1]['pickup_longitude'] = (combine[0]['pickup_longitude']-minLong)/(maxLong-minLong)
+combine[1]['pickup_latitude'] = (combine[1]['pickup_latitude']-minLat)/(maxLat-minLat)
+combine[1]['pickup_longitude'] = (combine[1]['pickup_longitude']-minLong)/(maxLong-minLong)
 
 minLat = combine[0]['dropoff_latitude'].min()
 minLong = combine[0]['dropoff_longitude'].min()
@@ -108,8 +108,8 @@ minLong = combine[1]['dropoff_longitude'].min()
 maxLat = combine[1]['dropoff_latitude'].max()
 maxLong = combine[1]['dropoff_longitude'].max()
 
-combine[1]['dropoff_latitude'] = (combine[0]['dropoff_latitude']-minLat)/(maxLat-minLat)
-combine[1]['dropoff_longitude'] = (combine[0]['dropoff_longitude']-minLong)/(maxLong-minLong)
+combine[1]['dropoff_latitude'] = (combine[1]['dropoff_latitude']-minLat)/(maxLat-minLat)
+combine[1]['dropoff_longitude'] = (combine[1]['dropoff_longitude']-minLong)/(maxLong-minLong)
 
 
 # Making vendor ID a one hot.
@@ -165,8 +165,6 @@ combine[1] = combine[1].drop(['pickup_datetime'], axis = 1)
 
 combine[0]['trip_duration'] = np.log1p(combine[0]['trip_duration'])
 
-#print(combine[0].head())
-
 # Training Models
 
 ntrain = combine[0].shape[0]
@@ -189,14 +187,13 @@ class StackingAveragedModels(BaseEstimator, RegressorMixin, TransformerMixin):
         self.meta_model = meta_model
         self.n_folds = n_folds
 
-    # We again fit the data on clones of the original models
+    # Fit the data on the original models
     def fit(self, X, y):
         self.base_models_ = [list() for x in self.base_models]
         self.meta_model_ = clone(self.meta_model)
         kfold = KFold(n_splits=self.n_folds, shuffle=True)
 
-        # Train cloned base models then create out-of-fold predictions
-        # that are needed to train the cloned meta-model
+        # Train base models then create predictions that are used to train the meta-model
         out_of_fold_predictions = np.zeros((X.shape[0], len(self.base_models)))
         for i, model in enumerate(self.base_models):
             for train_index, holdout_index in kfold.split(X, y):
@@ -206,12 +203,12 @@ class StackingAveragedModels(BaseEstimator, RegressorMixin, TransformerMixin):
                 y_pred = instance.predict(X[holdout_index])
                 out_of_fold_predictions[holdout_index, i] = y_pred
 
-        # Now train the cloned  meta-model using the out-of-fold predictions as new feature
+        # Now train the cloned  meta-model using the base predictions as new feature
         self.meta_model_.fit(out_of_fold_predictions, y)
         return self
 
     # Do the predictions of all base models on the test data and use the averaged predictions as
-    # meta-features for the final prediction which is done by the meta-model
+    # features for the final prediction which is done by the meta-model
     def predict(self, X):
         meta_features = np.column_stack([
             np.column_stack([model.predict(X) for model in base_models]).mean(axis=1)
