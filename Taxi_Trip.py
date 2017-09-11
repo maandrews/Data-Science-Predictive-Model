@@ -266,12 +266,6 @@ combine[0] = combine[0].drop("trip_duration", axis=1)
 frac_test = 0.2
 x_train, x_train2, y_train, y_train2 = train_test_split(combine[0], y_all, test_size = frac_test, random_state=156)
 
-
-xg_boost = xgb.XGBRegressor(max_depth=20, learning_rate=0.1, n_estimators=200)
-xg_boost.fit(x_train, y_train)
-pred = xg_boost.predict(x_train2)
-print("Neural Net: ", np.sqrt( mean_squared_error(np.expm1(y_train2), np.expm1(pred)) ) )
-
 # Neural Net
 mlp = MLPRegressor(hidden_layer_sizes=(15,7,4), random_state=252)
 mlp.fit(x_train,y_train)
