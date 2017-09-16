@@ -7,14 +7,11 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from scipy import stats
 from scipy.stats import norm
-
 from sklearn.metrics import mean_squared_error
 
 # machine learning
-from sklearn.neural_network import MLPRegressor
-from sklearn.ensemble import AdaBoostRegressor, RandomForestRegressor, \
-    GradientBoostingRegressor
-from sklearn.linear_model import Lasso
+from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
+from sklearn.tree import DecisionTreeRegressor
 from sklearn.model_selection import train_test_split
 
 import os
@@ -27,8 +24,6 @@ warnings.filterwarnings('ignore')
 
 
 # Load .csv files
-# train_df = pd.read_csv('taxitrain.csv')
-# test_df = pd.read_csv('taxitest.csv')
 combine = [pd.read_csv('taxitrain.csv'), pd.read_csv('taxitest.csv')]
 
 
@@ -40,7 +35,7 @@ combine[0] = combine[0].drop(['id'], axis=1)
 combine[0] = combine[0].drop(['dropoff_datetime'], axis = 1)
 
 # A lot of random outliers in this data.
-allLat  = np.array(list(combine[0]['pickup_latitude']) + list(combine[0]['dropoff_latitude']))
+allLat = np.array(list(combine[0]['pickup_latitude']) + list(combine[0]['dropoff_latitude']))
 allLong = np.array(list(combine[0]['pickup_longitude']) + list(combine[0]['dropoff_longitude']))
 
 longLimits = [np.percentile(allLong, 0.3), np.percentile(allLong, 99.7)]
@@ -64,7 +59,7 @@ combine[0] = combine[0][(combine[0]['passenger_count'] >= 1)]
 for dataset in combine:
     dataset.loc[dataset['passenger_count'] >= 7, 'passenger_count'] = 4
     dataset.loc[(dataset['passenger_count'] >= 3) & (dataset['passenger_count'] <= 6), 'passenger_count'] = 3
-
+    dataset['passenger_count'] = dataset['passenger_count'] / 4
 
 # Converting the flag to 1 or 0 from Y or N, and then making one hot
 for dataset in combine:
@@ -86,27 +81,21 @@ for dataset in combine:
     dataset['x_distance'] = 0
     dataset['y_distance'] = 0
     dataset['euclid_dist'] = 0
+    dataset['man_dist'] = 0
 
     dataset['x_distance'] = abs(dataset.pickup_longitude - dataset.dropoff_longitude)
     dataset['y_distance'] = abs(dataset.pickup_latitude - dataset.dropoff_latitude)
     dataset['euclid_dist'] = np.sqrt( (dataset['x_distance']*dataset['x_distance'])
                                    + (dataset['y_distance']*dataset['y_distance']) )
-
+    dataset['man_dist'] = dataset['x_distance'] + dataset['y_distance']
 
 # Basically right skew normal so log transform
 for ds in combine:
     ds['euclid_dist'] = np.log1p(ds['euclid_dist'])
     ds['x_distance'] = np.log1p(ds['x_distance'])
     ds['y_distance'] = np.log1p(ds['y_distance'])
+    ds['man_dist'] = np.log1p(ds['man_dist'])
 
-
-# Getting direction of travel.  West = 0, East = 1.  North = 1, South = 0
-for ds in combine:
-    ds['DistVert'] = 0
-    ds['DistHoriz'] = 0
-
-    ds.loc[(ds['pickup_longitude'] < ds['dropoff_longitude']), 'DistHoriz'] = 1
-    ds.loc[(ds['pickup_latitude'] < ds['dropoff_latitude']), 'DistVert'] = 1
 
 # Create some neighbourhoods
 def getNeighbourhood(long, lat):
@@ -134,22 +123,19 @@ def getNeighbourhood(long, lat):
 for ds in combine:
     ds['From'] = 0
     ds['To'] = 0
-    ds['TravelCode'] = 0
 
     ds['From'] = ds.apply(lambda row: getNeighbourhood(row['pickup_longitude'], row['pickup_latitude']), axis=1)
     ds['To'] = ds.apply(lambda row: getNeighbourhood(row['dropoff_longitude'], row['dropoff_latitude']), axis=1)
-    ds['TravelCode'] = (ds['From']+0.05)*(ds['To']+0.05)
 
-# Drop lat and long now, something that precise probably isn't all that useful
 
-combine[0] = combine[0].drop(['pickup_longitude'], axis=1)
-combine[0] = combine[0].drop(['pickup_latitude'], axis=1)
-combine[0] = combine[0].drop(['dropoff_longitude'], axis=1)
-combine[0] = combine[0].drop(['dropoff_latitude'], axis=1)
-combine[1] = combine[1].drop(['pickup_longitude'], axis=1)
-combine[1] = combine[1].drop(['pickup_latitude'], axis=1)
-combine[1] = combine[1].drop(['dropoff_longitude'], axis=1)
-combine[1] = combine[1].drop(['dropoff_latitude'], axis=1)
+combine[0] = combine[0].round({'pickup_longitude':3, 'pickup_latitude':3, 'dropoff_longitude':3, 'dropoff_latitude':3})
+combine[1] = combine[1].round({'pickup_longitude':3, 'pickup_latitude':3, 'dropoff_longitude':3, 'dropoff_latitude':3})
+for ds in combine:
+    ds['pickup_longitude'] = ds['pickup_longitude'] + 74
+    ds['pickup_latitude'] = ds['pickup_latitude'] - 40
+    ds['dropoff_longitude'] = ds['dropoff_longitude'] + 74
+    ds['dropoff_latitude'] = ds['dropoff_latitude'] - 40
+
 
 
 #sns.distplot(combine[0]['euclid_dist']);
@@ -190,9 +176,6 @@ for dataset in combine:
     dataset['Hour'] = dataset['pickup_datetime'].dt.hour
     dataset['Minute'] = dataset['pickup_datetime'].dt.minute
 
-    dataset['dayOfYear'] = dataset['dayOfYear'] / 366
-    dataset['Hour'] = dataset['Hour'] / 24
-    dataset['Minute'] = dataset['Minute'] / 60
     # Determining if a trip started around rush hour
     dataset.loc[(((dataset['Hour'] >= 6) & (dataset['Hour'] < 10))
                  | ((dataset['Hour'] >= 16) & (dataset['Hour'] < 20))), 'isRushHour'] = 1
@@ -202,59 +185,94 @@ for dataset in combine:
 
     # Determining if a trip was on a weekend/holiday
     dataset['isOffDay'] = dataset['dayOfYear'].apply(isDayOff)
-    dataset.loc[(dataset['isOffDay'] == 1), 'isRushHour'] = 0
-    dataset.loc[(dataset['isOffDay'] == 1), 'isMidPeak'] = 0
+    # dataset.loc[(dataset['isOffDay'] == 1), 'isRushHour'] = 0
+    # dataset.loc[(dataset['isOffDay'] == 1), 'isMidPeak'] = 0
+
+
 
 combine[0] = combine[0].drop(['pickup_datetime'], axis = 1)
 combine[1] = combine[1].drop(['pickup_datetime'], axis = 1)
 
 # Get average trip durations of rides on the same type of day (weekday, weekend) at the same hour.
-# guess_times_mean = np.zeros((24, 2, 55))
-# guess_times_median = np.zeros((24, 2, 55))
-# for i in range(0, 24):
-#     for j in range(0, 2):
-#         index = 0
-#         for k in range(0, 10):
-#             for l in range(k, 10):
-#                 # This joins those with the same day type and hour departed
-#                 guess = combine[0][(combine[0]['isOffDay'] == j) & (combine[0]['Hour'] == i) &
-#                                    (combine[0]['TravelCode'] == ((k/10+0.05) * (l/10+0.05)))]['trip_duration'].dropna()
-#                 guess_mean = guess.mean()
-#                 guess_med = guess.median()
-#
-#                 if np.isnan(guess_mean):
-#                     guess_times_mean[i, j, index] = 0
-#                 else:
-#                     guess_times_mean[i, j, index] = guess.mean()
-#
-#                 if np.isnan(guess_med):
-#                     guess_times_median[i, j, index] = 0
-#                 else:
-#                     guess_times_median[i, j, index] = guess.median()
-#                 index = index + 1
-#
-# for ds in combine:
-#     ds['TripMean'] = 0
-#     ds['TripMed'] = 0
-#     for i in range(0, 24):
-#         for j in range(0, 2):
-#             index = 0
-#             for k in range(0, 10):
-#                 for l in range(k, 10):
-#                     ds.loc[(ds['isOffDay'] == j) & (ds['Hour'] == i) &
-#                            (combine[0]['TravelCode'] == ((k/10+0.05) * (l/10+0.05))),
-#                            'TripMean'] = guess_times_mean[i, j, index]
-#                     ds.loc[(ds['isOffDay'] == j) & (ds['Hour'] == i) &
-#                            (combine[0]['TravelCode'] == ((k/10+0.05) * (l/10+0.05))),
-#                            'TripMed'] = guess_times_median[i, j, index]
-#                     index = index + 1
-#
-# combine[0]['TripMean'] = np.log1p(combine[0]['TripMean'])
-# combine[0]['TripMed'] = np.log1p(combine[0]['TripMed'])
-# combine[1]['TripMean'] = np.log1p(combine[1]['TripMean'])
-# combine[1]['TripMed'] = np.log1p(combine[1]['TripMed'])
+guess_times_mean = np.zeros((24, 2, 10, 10))
+guess_times_median = np.zeros((24, 2, 10, 10))
+guess_vel = np.zeros((24, 2, 10, 10))
+for i in range(0, 24):
+    for j in range(0, 2):
+        for k in range(0, 10):
+            for l in range(0, 10):
+                # This joins those with the same day type and hour departed
+                time_df = combine[0][(combine[0]['isOffDay'] == j) & (combine[0]['Hour'] == i) &
+                                   (combine[0]['From'] == (l/10)) &
+                                   (combine[0]['To'] == (k/10))]['trip_duration'].dropna()
+                dist_df = combine[0][(combine[0]['isOffDay'] == j) & (combine[0]['Hour'] == i) &
+                                   (combine[0]['From'] == (l/10)) &
+                                   (combine[0]['To'] == (k/10))]['euclid_dist'].dropna()
+
+                guess_dist = dist_df.mean()
+                guess_mean = time_df.mean()
+                guess_med = time_df.median()
+
+                if np.isnan(guess_mean):
+                    guess_times_mean[i, j, k, l] = 0
+                    guess_vel[i, j, k, l] = 0
+                else:
+                    if np.isnan(guess_dist):
+                        guess_vel[i, j, k, l] = 0
+                    elif guess_mean == 0:
+                        guess_vel[i, j, k, l] = 0
+                    else:
+                        guess_vel[i, j, k, l] = guess_dist / guess_mean
+
+                    guess_times_mean[i, j, k , l] = guess_mean
+
+                if np.isnan(guess_med):
+                    guess_times_median[i, j, k, l] = 0
+                else:
+                    guess_times_median[i, j, k, l] = guess_med
+
+for ds in combine:
+    ds['TripMean'] = 0
+    ds['TripMed'] = 0
+    ds['TripVel'] = 0
+    for i in range(0, 24):
+        for j in range(0, 2):
+            for k in range(0, 10):
+                for l in range(k, 10):
+                    ds.loc[(ds['isOffDay'] == j) & (ds['Hour'] == i) &
+                           (ds['From'] == (l/10)) & (ds['To'] == (k/10)),
+                           'TripMean'] = guess_times_mean[i, j, k, l]
+                    ds.loc[(ds['isOffDay'] == j) & (ds['Hour'] == i) &
+                           (ds['From'] == (l / 10)) & (ds['To'] == (k / 10)),
+                           'TripMed'] = guess_times_median[i, j, k, l]
+                    ds.loc[(ds['isOffDay'] == j) & (ds['Hour'] == i) &
+                           (ds['From'] == (l / 10)) & (ds['To'] == (k / 10)),
+                           'TripVel'] = guess_vel[i, j, k, l]
+
+combine[0]['Duration_From_Vel'] = 0
+combine[1]['Duration_From_Vel'] = 0
+
+combine[0].loc[(combine[0]['TripVel'] != 0),'Duration_From_Vel'] = combine[0]['euclid_dist'] / combine[0]['TripVel']
+combine[1].loc[(combine[1]['TripVel'] != 0),'Duration_From_Vel'] = combine[1]['euclid_dist'] / combine[1]['TripVel']
+
+combine[0] = combine[0].drop(['TripVel'], axis = 1)
+combine[1] = combine[1].drop(['TripVel'], axis = 1)
+
+combine[0]['TripMean'] = np.log1p(combine[0]['TripMean'])
+combine[0]['TripMed'] = np.log1p(combine[0]['TripMed'])
+combine[1]['TripMean'] = np.log1p(combine[1]['TripMean'])
+combine[1]['TripMed'] = np.log1p(combine[1]['TripMed'])
+combine[0]['Duration_From_Vel'] = np.log1p(combine[0]['Duration_From_Vel'])
+combine[1]['Duration_From_Vel'] = np.log1p(combine[1]['Duration_From_Vel'])
 
 combine[0]['trip_duration'] = np.log1p(combine[0]['trip_duration'])
+
+
+combine[0] = combine[0].drop(['Minute'], axis = 1)
+combine[1] = combine[1].drop(['Minute'], axis = 1)
+
+combine[0] = combine[0].drop(['passenger_count'], axis = 1)
+combine[1] = combine[1].drop(['passenger_count'], axis = 1)
 
 print("Done pre-processing.")
 
@@ -266,74 +284,99 @@ combine[0] = combine[0].drop("trip_duration", axis=1)
 frac_test = 0.2
 x_train, x_train2, y_train, y_train2 = train_test_split(combine[0], y_all, test_size = frac_test, random_state=156)
 
+
+# xg_boost = xgb.XGBRegressor(max_depth=20, learning_rate=0.1, n_estimators=200)
+# xg_boost.fit(x_train, y_train, eval_metric='rmse')
+# #xgb.plot_importance(xg_boost)
+# pred = xg_boost.predict(x_train2)
+# print("xg: ", np.sqrt( mean_squared_error(np.expm1(y_train2), np.expm1(pred)) ) )
+
 # Neural Net
-mlp = MLPRegressor(hidden_layer_sizes=(15,7,4), random_state=252)
-mlp.fit(x_train,y_train)
+# mlp = MLPRegressor(hidden_layer_sizes=(15,7,4), learning_rate_init = 0.01, random_state=252)
+# mlp.fit(x_train,y_train)
 # pred = mlp.predict(x_train2)
 # print("Neural Net: ", np.sqrt( mean_squared_error(np.expm1(y_train2), np.expm1(pred)) ) )
 
-# AdaBoost
-ab = AdaBoostRegressor(n_estimators = 50,learning_rate = 0.01, random_state=17)
-ab.fit(x_train,y_train)
-# pred = ab.predict(x_train2)
-# print("AdaBoost: ", np.sqrt( mean_squared_error(np.expm1(y_train2), np.expm1(pred)) ) )
-
 # Random Forest
-rf = RandomForestRegressor(n_estimators = 20, random_state=147)
+rf = RandomForestRegressor(n_estimators = 25, random_state=147)
 rf.fit(x_train,y_train)
-# pred = rf.predict(x_train2)
-# print("Random Forest: ", np.sqrt( mean_squared_error(np.expm1(y_train2), np.expm1(pred)) ) )
+pred = rf.predict(x_train2)
+print("Random Forest: ", np.sqrt( mean_squared_error(np.expm1(y_train2), np.expm1(pred)) ) )
 
 # Gradient Boosting
 gbc = GradientBoostingRegressor(n_estimators = 100, learning_rate = 0.1, random_state=1652)
 gbc.fit(x_train,y_train)
-# pred = gbc.predict(x_train2)
-# print("Gradient Boost: ", np.sqrt( mean_squared_error(np.expm1(y_train2), np.expm1(pred)) ) )
+pred = gbc.predict(x_train2)
+print("Gradient Boost: ", np.sqrt( mean_squared_error(np.expm1(y_train2), np.expm1(pred)) ) )
+
+# Decision Tree
+dt = DecisionTreeRegressor(max_depth = 15, random_state=2422)
+dt.fit(x_train,y_train)
+pred = dt.predict(x_train2)
+print("Decision Tree: ", np.sqrt( mean_squared_error(np.expm1(y_train2), np.expm1(pred)) ) )
 
 
-predictions_MLP_train = mlp.predict(x_train2)
-predictions_AB_train = ab.predict(x_train2)
+
+#predictions_MLP_train = mlp.predict(x_train2)
 predictions_RF_train = rf.predict(x_train2)
 predictions_GBC_train = gbc.predict(x_train2)
+predictions_DT_train = dt.predict(x_train2)
 
-predictions_MLP_train = predictions_MLP_train.reshape(-1,1)
-predictions_AB_train = predictions_AB_train.reshape(-1,1)
+# predictions_AVG = (predictions_MLP_train+predictions_AB_train+predictions_RF_train
+#                    +predictions_GBC_train+predictions_DT_train) / 5
+
+# predictions_AVG = predictions_AVG.reshape(-1,1)
+#predictions_MLP_train = predictions_MLP_train.reshape(-1,1)
 predictions_RF_train = predictions_RF_train.reshape(-1,1)
 predictions_GBC_train = predictions_GBC_train.reshape(-1,1)
+predictions_DT_train = predictions_DT_train.reshape(-1,1)
 
 
-next_x_train = np.concatenate((predictions_MLP_train, predictions_AB_train, predictions_RF_train,
-                               predictions_GBC_train,), axis=1)
-
+# next_x_train = np.concatenate((predictions_RF_train,
+#                                predictions_GBC_train,predictions_DT_train), axis=1)
+x_train2['pred_RF'] = predictions_RF_train[:]
+x_train2['pred_GBC'] = predictions_GBC_train[:]
+x_train2['pred_DT'] = predictions_DT_train[:]
 
 print("Training second layer")
 
-xg_boost = xgb.XGBRegressor(max_depth=2, learning_rate=0.05, n_estimators=200)
-xg_boost.fit(next_x_train, y_train2)
+xg_boost = xgb.XGBRegressor(max_depth=20, learning_rate=0.1, n_estimators=200)
+xg_boost.fit(x_train2, y_train2, eval_metric='rmse')
 
 
 x_test = combine[1].drop(['id'], axis=1)
 
 # First level predictions of test set:
-predictions_MLP_train = mlp.predict(x_test)
-predictions_AB_train = ab.predict(x_test)
+#predictions_MLP_train = mlp.predict(x_test)
 predictions_RF_train = rf.predict(x_test)
 predictions_GBC_train = gbc.predict(x_test)
+predictions_DT_train = dt.predict(x_test)
 
-predictions_MLP_train = predictions_MLP_train.reshape(-1,1)
-predictions_AB_train = predictions_AB_train.reshape(-1,1)
+# predictions_AVG = (predictions_MLP_train + predictions_AB_train + predictions_RF_train
+#                    + predictions_GBC_train + predictions_DT_train) / 5
+
+# predictions_AVG = predictions_AVG.reshape(-1,1)
+#predictions_MLP_train = predictions_MLP_train.reshape(-1,1)
 predictions_RF_train = predictions_RF_train.reshape(-1,1)
 predictions_GBC_train = predictions_GBC_train.reshape(-1,1)
+predictions_DT_train = predictions_DT_train.reshape(-1,1)
 
-next_x_test = np.concatenate((predictions_MLP_train, predictions_AB_train, predictions_RF_train,
-                               predictions_GBC_train,), axis=1)
+# next_x_test = np.concatenate((predictions_RF_train,
+#                                predictions_GBC_train,predictions_DT_train), axis=1)
+x_test['pred_RF'] = predictions_RF_train[:]
+x_test['pred_GBC'] = predictions_GBC_train[:]
+x_test['pred_DT'] = predictions_DT_train[:]
 
 
 # Final model prediction
-final_pred = xg_boost.predict(next_x_test)
+final_pred = xg_boost.predict(x_test)
 final_pred = np.expm1(final_pred)
 sub = pd.DataFrame({'id': combine[1]['id'], 'trip_duration': final_pred})
 sub.to_csv("Taxi_Ride_Submission.csv", index=False)
+
+
+
+
 
 
 
